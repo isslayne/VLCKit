@@ -1,0 +1,35 @@
+From dea72b148a1250808c625dda0077e43d11689845 Mon Sep 17 00:00:00 2001
+From: Thomas Guillem <thomas@gllm.fr>
+Date: Tue, 29 May 2018 18:04:38 +0200
+Subject: [PATCH 1/4] avcodec/videotoolboxenc: fix mutex/cond leak in error
+ path
+
+The leak could happen when the vtenc_create_encoder() function failed.
+---
+ libavcodec/videotoolboxenc.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/libavcodec/videotoolboxenc.c b/libavcodec/videotoolboxenc.c
+index 086beb41fc..aafef20db0 100644
+--- a/libavcodec/videotoolboxenc.c
++++ b/libavcodec/videotoolboxenc.c
+@@ -2473,13 +2473,14 @@ static av_cold int vtenc_close(AVCodecContext *avctx)
+ {
+     VTEncContext *vtctx = avctx->priv_data;
+ 
++    pthread_cond_destroy(&vtctx->cv_sample_sent);
++    pthread_mutex_destroy(&vtctx->lock);
++
+     if(!vtctx->session) return 0;
+ 
+     VTCompressionSessionCompleteFrames(vtctx->session,
+                                        kCMTimeIndefinite);
+     clear_frame_queue(vtctx);
+-    pthread_cond_destroy(&vtctx->cv_sample_sent);
+-    pthread_mutex_destroy(&vtctx->lock);
+     CFRelease(vtctx->session);
+     vtctx->session = NULL;
+ 
+-- 
+2.18.0
+

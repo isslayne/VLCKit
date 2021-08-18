@@ -1,0 +1,105 @@
+From 029cb11cf13275ec8536d889aae4a307eb987b2f Mon Sep 17 00:00:00 2001
+From: Thomas Guillem <thomas@gllm.fr>
+Date: Tue, 3 Jul 2018 16:59:34 +0200
+Subject: [PATCH 4/4] avcodec/videotoolboxenc: fix undefined behavior with
+ rc_max_rate=0
+
+On macOS, a zero rc_max_rate cause an error from
+VTSessionSetProperty(kVTCompressionPropertyKey_DataRateLimits).
+
+on iOS (depending on device/version), a zero rc_max_rate cause invalid
+arguments from the vtenc_output_callback after few frames and then a crash
+within the VideoToolbox library.
+---
+ libavcodec/videotoolboxenc.c | 72 ++++++++++++++++++------------------
+ 1 file changed, 37 insertions(+), 35 deletions(-)
+
+diff --git a/libavcodec/videotoolboxenc.c b/libavcodec/videotoolboxenc.c
+index f516ad7d40..c2f827b9c6 100644
+--- a/libavcodec/videotoolboxenc.c
++++ b/libavcodec/videotoolboxenc.c
+@@ -1019,44 +1019,46 @@ static int vtenc_create_encoder(AVCodecContext   *avctx,
+ 
+     if (vtctx->codec_id == AV_CODEC_ID_H264) {
+         // kVTCompressionPropertyKey_DataRateLimits is not available for HEVC
+-        bytes_per_second_value = max_rate >> 3;
+-        bytes_per_second = CFNumberCreate(kCFAllocatorDefault,
+-                                          kCFNumberSInt64Type,
+-                                          &bytes_per_second_value);
+-        if (!bytes_per_second) {
+-            return AVERROR(ENOMEM);
+-        }
+-        one_second_value = 1;
+-        one_second = CFNumberCreate(kCFAllocatorDefault,
+-                                    kCFNumberSInt64Type,
+-                                    &one_second_value);
+-        if (!one_second) {
+-            CFRelease(bytes_per_second);
+-            return AVERROR(ENOMEM);
+-        }
+-        nums[0] = (void *)bytes_per_second;
+-        nums[1] = (void *)one_second;
+-        data_rate_limits = CFArrayCreate(kCFAllocatorDefault,
+-                                         (const void **)nums,
+-                                         2,
+-                                         &kCFTypeArrayCallBacks);
+-
+-        if (!data_rate_limits) {
++        if (max_rate > 0) {
++            bytes_per_second_value = max_rate >> 3;
++            bytes_per_second = CFNumberCreate(kCFAllocatorDefault,
++                                              kCFNumberSInt64Type,
++                                              &bytes_per_second_value);
++            if (!bytes_per_second) {
++                return AVERROR(ENOMEM);
++            }
++            one_second_value = 1;
++            one_second = CFNumberCreate(kCFAllocatorDefault,
++                                        kCFNumberSInt64Type,
++                                        &one_second_value);
++            if (!one_second) {
++                CFRelease(bytes_per_second);
++                return AVERROR(ENOMEM);
++            }
++            nums[0] = (void *)bytes_per_second;
++            nums[1] = (void *)one_second;
++            data_rate_limits = CFArrayCreate(kCFAllocatorDefault,
++                                             (const void **)nums,
++                                             2,
++                                             &kCFTypeArrayCallBacks);
++
++            if (!data_rate_limits) {
++                CFRelease(bytes_per_second);
++                CFRelease(one_second);
++                return AVERROR(ENOMEM);
++            }
++            status = VTSessionSetProperty(vtctx->session,
++                                          kVTCompressionPropertyKey_DataRateLimits,
++                                          data_rate_limits);
++
+             CFRelease(bytes_per_second);
+             CFRelease(one_second);
+-            return AVERROR(ENOMEM);
+-        }
+-        status = VTSessionSetProperty(vtctx->session,
+-                                      kVTCompressionPropertyKey_DataRateLimits,
+-                                      data_rate_limits);
++            CFRelease(data_rate_limits);
+ 
+-        CFRelease(bytes_per_second);
+-        CFRelease(one_second);
+-        CFRelease(data_rate_limits);
+-
+-        if (status) {
+-            av_log(avctx, AV_LOG_ERROR, "Error setting max bitrate property: %d\n", status);
+-            return AVERROR_EXTERNAL;
++            if (status) {
++                av_log(avctx, AV_LOG_ERROR, "Error setting max bitrate property: %d\n", status);
++                return AVERROR_EXTERNAL;
++            }
+         }
+ 
+         if (profile_level) {
+-- 
+2.18.0
+
